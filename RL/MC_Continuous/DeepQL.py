@@ -4,7 +4,7 @@ import cv2
 # import copy
 from os.path import join
 
-from MountainCar.ANN import torch, ANN
+from MC_Continuous.ANN import torch, ANN
 
 
 class Agent():
@@ -130,27 +130,17 @@ class Agent():
             moves = 0
             # Play while game not over or max number of moves hasnt been played
             while (not done) and (moves < maxMoves):
-                if render:
-                    self.capture_video_frame(all=True) # caputure everything
-                    # self.env.render()
                 moves += 1
-                action = self.model(state) # Pass the state through the trained model
-                action_ = action.detach().numpy()                               
-                next_, reward, terminated, truncated, _ = self.env.step(action_)
-                done = terminated or truncated
-                # Cumulatively store the received rewards
-                totalReward += reward
-                # Set the next state as current state
-                state = torch.from_numpy(next_)
+                state, action, reward, done = self.step(state, render, train_mode=False)
                 # trace information
-                info[g]['actions'].append(action_.item())
+                info[g]['actions'].append(action.item())
                 info[g]['rewards'].append(reward)
-                info[g]['terminated'] = terminated
+                info[g]['terminated'] = done
             
             print('Test episode {}: total rewards = {:.2f} (in {}/{} moves)' \
                   .format(g, totalReward, moves, maxMoves))
             allRewards.append(totalReward)
-            if terminated:
+            if done:
                 wins += 1
         # Create video (if any)
         self.create_video(mode='test')

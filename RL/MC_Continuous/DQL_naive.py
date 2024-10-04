@@ -1,4 +1,4 @@
-from MountainCar.DeepQL import *
+from MC_Continuous.DeepQL import *
 
 class naive_Agent(Agent):
     def __init__(self, env, **kwargs): 

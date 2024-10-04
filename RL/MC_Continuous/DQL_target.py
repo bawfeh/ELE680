@@ -1,4 +1,4 @@
-from MountainCar.DeepQL import *
+from MC_Continuous.DeepQL import *
 from collections import deque, namedtuple
 import copy
 
