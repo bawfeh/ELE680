@@ -14,16 +14,20 @@ class ANN(torch.nn.Module):
             layers : list defining number of units per hidden layer | list <int> (positive), default = []
         """
         # Defining the layers
-        self.hidden = []
+        self.mlp = torch.nn.Sequential()
         if len(layers):
             layer = torch.nn.Linear(input_dim, layers[0])
-            self.hidden.append(layer)
+            self.mlp.add_module(module=layer, name='input')
             for j in range(1,len(layers)):
+                self.mlp.add_module(module=torch.nn.ReLU(), name=f'relu_{j}')
                 layer = torch.nn.Linear(layers[j-1], layers[j])
-                self.hidden.append(layer)
-            self.output = torch.nn.Linear(layers[-1], output_dim)
+                self.mlp.add_module(module=layer, name=f'hidden_{j}')
+            self.mlp.add_module(module=torch.nn.ReLU(), name=f'relu_{len(layers)}')
+            output = torch.nn.Linear(layers[-1], output_dim)
+            self.mlp.add_module(module=output, name='output')
         else:
-            self.output = torch.nn.Linear(input_dim, output_dim)
+            output = torch.nn.Linear(input_dim, output_dim)
+            self.mlp.add_module(module=output, name='output')
         
         # Choose the activation function
         if activation == 'relu':
@@ -37,6 +41,5 @@ class ANN(torch.nn.Module):
 
     def forward(self, x):
         # Forward pass through the network
-        for layer in self.hidden:
-            x = torch.nn.ReLU()(layer(x))
-        return self.activation(self.output(x))
+        M = self.mlp(x)
+        return M

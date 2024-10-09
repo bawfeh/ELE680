@@ -10,17 +10,16 @@ class experience_Agent(Agent):
          to train agent network. """
         # Retrieve a random batch of information (state, action, reward, done, next) from replay memory                             
         batchIndices = np.random.choice(len(replay), size=batchSize, replace=False)  
-        stateBatch = torch.stack([replay[i].state for i in batchIndices]) 
-        # actionBatch = torch.Tensor([replay[i].action for i in batchIndices]) 
+        stateBatch = torch.stack([replay[i].state for i in batchIndices]).squeeze(1) 
+        actionBatch = torch.Tensor([replay[i].action for i in batchIndices]) 
         rewardBatch = torch.Tensor([replay[i].reward for i in batchIndices]) 
         doneBatch = torch.Tensor([replay[i].done for i in batchIndices]) 
-        nextStateBatch = torch.stack([replay[i].next_state for i in batchIndices]) 
+        nextStateBatch = torch.stack([replay[i].next_state for i in batchIndices]).squeeze(1)  
         
         # Calculate the Q values for the current state
         Q = self.model(stateBatch)
         # State action values (associated with the actions that were actually taken)
-        # Y = Q.gather(dim=1, index=actionBatch.long().unsqueeze(dim=1)).squeeze()
-        Y = Q.squeeze()
+        Y = Q.gather(dim=1, index=actionBatch.long().unsqueeze(dim=1)).squeeze()
 
         # Calculate the Q values for the next state
         with torch.no_grad():
@@ -58,11 +57,15 @@ class experience_Agent(Agent):
         self.frames = []  # to collect frames for video
         if maxMoves is None:
             maxMoves = self.env.spec.max_episode_steps
-        win_size = int(np.round(epochs/10)) # window size for moving averages
+        win_size = epochs // 10 # window size for moving averages
+        best_episode = 0
 
         for e in range(epochs):                                                            
             # Store the initial state
-            state = torch.from_numpy(self.env.reset()[0]).float()
+            frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+            next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+            state = next_frame - frame
+            # state = torch.from_numpy(self.env.reset()[0]).float()
             # Store the rewards for each game played
             totalReward = 0
             # Continue until game over (done=True) 
@@ -70,8 +73,12 @@ class experience_Agent(Agent):
             done = False
             moves = 0
             while (not done) and (moves < maxMoves):
+                self.update_epsilon(moves)
                 moves += 1
-                next_state, action, reward, done = self.step(state, render, e)
+                _, action, reward, done = self.step(state, render, e)
+                frame = next_frame
+                next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+                next_state = next_frame - frame
                 # Store the cumulative reward
                 totalReward += reward
                 # Add to memory
@@ -87,9 +94,13 @@ class experience_Agent(Agent):
                 loss = self.learn_from_experience(replay, batchSize)
                 history['loss'].append(loss.item())
 
-            # Adapt the epsilon value in each epoch
-            if self.epsilon > self.minEpsilon:
-                self.epsilon -= self.maxEpsilon / epochs   
+            # # Adapt the epsilon value in each epoch
+            # if self.epsilon > self.minEpsilon:
+            #     self.epsilon -= self.maxEpsilon / epochs  
+
+            # Save best model
+            saved = self.save_model(history) 
+            if saved: best_episode = e
 
             # Print the progress 
             if e % win_size == 0:  
@@ -107,6 +118,7 @@ class experience_Agent(Agent):
         self.create_video()
 
         print(f"Wins {sum(history['wins'])} out of {epochs} plays!")
+        print(f"Saved episode {best_episode}!")
         
         # Return training history
         return history

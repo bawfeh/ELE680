@@ -14,9 +14,8 @@ class target_Agent(Agent):
         ARGS:
             lr : learning rate for training the neural network | float (between 0 and 1)
         """
-        # Dynamically generate the primary model
-        self.model = ANN(input_dim=self.num_states, output_dim=self.num_actions,
-                          layers=self.layers, activation='tanh')
+        # Generate instance of the primary model
+        self.model = CNN(h=self.frame_height, w=self.frame_width, outputs=self.num_actions)
         
         # Copy the main model as secondary model 
         # (needed for Q-Learning with Experiance Replay and a Target Network)
@@ -33,17 +32,17 @@ class target_Agent(Agent):
          to train agent network. """
         # Retrieve a random batch of information (state, action, reward, done, next) from replay memory                             
         batchIndices = np.random.choice(len(replay), size=batch_size, replace=False)  
-        stateBatch = torch.stack([replay[i].state for i in batchIndices]) 
-        # actionBatch = torch.Tensor([replay[i].action for i in batchIndices]) 
+        stateBatch = torch.stack([replay[i].state for i in batchIndices]).squeeze(1)  
+        actionBatch = torch.Tensor([replay[i].action for i in batchIndices]) 
         rewardBatch = torch.Tensor([replay[i].reward for i in batchIndices]) 
         doneBatch = torch.Tensor([replay[i].done for i in batchIndices]) 
-        next_stateBatch = torch.stack([replay[i].next_state for i in batchIndices]) 
+        next_stateBatch = torch.stack([replay[i].next_state for i in batchIndices]).squeeze(1)  
         
         # Calculate the Q values for the current state
         Q = self.model(stateBatch)
         # State action values (associated with the actions that were actually taken)
-        # Y = Q.gather(dim=1, index=actionBatch.long().unsqueeze(dim=1)).squeeze()
-        Y = Q.squeeze()
+        Y = Q.gather(dim=1, index=actionBatch.long().unsqueeze(dim=1)).squeeze()
+        # Y = Q.squeeze()
 
         # Calculate the Q values for the next state. <- We use the secondary model
         with torch.no_grad():
@@ -83,12 +82,15 @@ class target_Agent(Agent):
         if maxMoves is None:
             maxMoves = self.env.spec.max_episode_steps
         win_size =  int(np.round(epochs/10)) # window size for moving averages
+        best_episode = 0
 
         syncController = 0
         for e in range(epochs): 
             syncController += 1                                                            
             # Store the initial state
-            state = torch.from_numpy(self.env.reset()[0]).float()
+            frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+            next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+            state = next_frame - frame
             # Store the rewards for each game played
             totalReward = 0
             # Continue until game over (done=True) 
@@ -96,8 +98,12 @@ class target_Agent(Agent):
             done = False
             moves = 0
             while (not done) and (moves < maxMoves):
+                self.update_epsilon(moves)
                 moves += 1
-                next_state, action, reward, done = self.step(state, render, e)
+                _, action, reward, done = self.step(state, render, e)
+                frame = next_frame
+                next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+                next_state = next_frame - frame
                 # Store the cumulative reward
                 totalReward += reward
                 # Add to memory
@@ -105,19 +111,24 @@ class target_Agent(Agent):
                 # Assign the next state as current
                 state = next_state
 
-            # Store the cumulative reward and wins
-            history['reward'].append(totalReward)
-            history['wins'].append(done)
-
             if len(replay) > batchSize: 
                 loss = self.learn_from_experience(replay, batchSize)
                 history['loss'].append(loss.item())
+                
                 if syncController % syncFreq == 0: # <- Update the secondary model
                     self.secondaryModel.load_state_dict(self.model.state_dict()) 
+
+            # Store the cumulative reward and wins
+            history['reward'].append(totalReward)
+            history['wins'].append(done)
                     
-            # Adapt the epsilon value in each epoch
-            if self.epsilon > self.minEpsilon:
-                self.epsilon -= self.maxEpsilon / epochs   
+            # # Adapt the epsilon value in each epoch
+            # if self.epsilon > self.minEpsilon:
+            #     self.epsilon -= self.maxEpsilon / epochs 
+
+            # Save best model
+            saved = self.save_model(history, filename='saved_model_target') 
+            if saved: best_episode = e  
 
             # Print the progress 
             if e % win_size == 0:                
@@ -135,6 +146,7 @@ class target_Agent(Agent):
         self.create_video()
 
         print(f"Wins {sum(history['wins'])} out of {epochs} plays!")
+        print(f"Saved episode {best_episode}!")
         
         # Return training history
         return history
