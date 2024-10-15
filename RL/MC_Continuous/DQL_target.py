@@ -15,7 +15,7 @@ class target_Agent(Agent):
             lr : learning rate for training the neural network | float (between 0 and 1)
         """
         # Generate instance of the primary model
-        self.model = CNN(h=self.frame_height, w=self.frame_width, outputs=self.num_actions)
+        self.model = CNN(h=self.frame_height, w=self.frame_width, outputs=self.num_actions) #.to(self.device)
         
         # Copy the main model as secondary model 
         # (needed for Q-Learning with Experiance Replay and a Target Network)
@@ -63,7 +63,8 @@ class target_Agent(Agent):
               maxMoves = None, 
               memorySize=250, 
               batchSize=100, 
-              syncFreq=200,
+              syncFreq=1,
+              TAU = 1,
               render=False): 
         """ Training the Neural model """
         # Ensure memorySize >= batchSize
@@ -77,7 +78,7 @@ class target_Agent(Agent):
         )
         # Initialize Neural Net framework
         self.createNeuralNetwork(lr=learningRate)
-        
+
         self.frames = []  # to collect frames for video
         if maxMoves is None:
             maxMoves = self.env.spec.max_episode_steps
@@ -86,10 +87,11 @@ class target_Agent(Agent):
 
         syncController = 0
         for e in range(epochs): 
-            syncController += 1                                                            
-            # Store the initial state
-            frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
-            next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+            syncController += 1   
+            # Initialize the environment and state                                                         
+            _ = self.env.reset()
+            frame = self.resize(self.get_frame()).unsqueeze(0) #.to(self.device)
+            next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(self.device)
             state = next_frame - frame
             # Store the rewards for each game played
             totalReward = 0
@@ -102,7 +104,7 @@ class target_Agent(Agent):
                 moves += 1
                 _, action, reward, done = self.step(state, render, e)
                 frame = next_frame
-                next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
+                next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(self.device)
                 next_state = next_frame - frame
                 # Store the cumulative reward
                 totalReward += reward
@@ -115,19 +117,22 @@ class target_Agent(Agent):
                 loss = self.learn_from_experience(replay, batchSize)
                 history['loss'].append(loss.item())
                 
-                if syncController % syncFreq == 0: # <- Update the secondary model
-                    self.secondaryModel.load_state_dict(self.model.state_dict()) 
+                # if syncController % syncFreq == 0: # <- Update the secondary model
+                #     self.secondaryModel.load_state_dict(self.model.state_dict()) 
+
+                 # Soft update of the target network's weights
+                target_dict = self.secondaryModel.state_dict()
+                model_dict = self.model.state_dict()
+                for key in model_dict:
+                    target_dict[key] = model_dict[key]*TAU + target_dict[key]*(1-TAU)
+                self.secondaryModel.load_state_dict(target_dict)
 
             # Store the cumulative reward and wins
             history['reward'].append(totalReward)
             history['wins'].append(done)
-                    
-            # # Adapt the epsilon value in each epoch
-            # if self.epsilon > self.minEpsilon:
-            #     self.epsilon -= self.maxEpsilon / epochs 
 
             # Save best model
-            saved = self.save_model(history, filename='saved_model_target') 
+            saved = self.save_model(history) 
             if saved: best_episode = e  
 
             # Print the progress 
@@ -146,7 +151,8 @@ class target_Agent(Agent):
         self.create_video()
 
         print(f"Wins {sum(history['wins'])} out of {epochs} plays!")
-        print(f"Saved episode {best_episode}!")
+        if saved:
+            print(f"Saved episode {best_episode}!")
         
         # Return training history
         return history

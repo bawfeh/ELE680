@@ -17,18 +17,18 @@ class Agent():
                 path=None, 
                 recording_range=None, 
                 num_actions=10,
+                epsilon_decay=200,
                 seed=42):  
         """
         Class Inputs:
                 env : an instance of the gym environmnent
             epsilon : minimum exploration paramater for greedy action selection | float (between 0 and 1)
+        max_epsilon : maximum exploration paramater for greedy action selection | float (between 0 and 1)
               gamma : discount factor for computing expected discounted rewards | float (between 0 and 1)
+               path : directory where to save trained model | string, default=None
                seed : random generator seed for results reproducibility | int (positive)
     recording_range : range of episodes for video recording | list<int> (nonnegative)
-          algorithm : flag that determines agent training algorithm used  | string type | 
-                'naive' [online value estimator or Vanilla QL] (default), 
-                'replay' [QL with experience replay], 
-                'target' [QL with target network]
+        num_actions : number of discrete actions | int (positive)
         """ 
         # Torchvision tool for image transformations (includes min-Max scaling)
         # Frames are resized to take only small windows with car at center
@@ -38,6 +38,17 @@ class Agent():
             T.Resize(40, interpolation=T.InterpolationMode.BILINEAR),
             T.ToTensor()
         ]) 
+
+        # if GPU is to be used
+        self.device = torch.device(
+                    "cuda" if torch.cuda.is_available() else
+                    "mps" if torch.backends.mps.is_available() else
+                    "cpu"
+                )
+
+        np.random.seed(seed)
+        torch.seed = seed
+        torch.manual_seed(seed)
 
         # Set the name of the environment and reset  
         self.env = env
@@ -64,7 +75,7 @@ class Agent():
         self.minEpsilon = min(max(0, epsilon), 1)
         self.epsilon = min(max(0, max_epsilon), 1)
         self.maxEpsilon = max_epsilon
-        self.EPS_DECAY = 200
+        self.EPS_DECAY = epsilon_decay
 
         # Set up the gamma value (decay factor)
         self.gamma = gamma  
@@ -124,7 +135,7 @@ class Agent():
             self.capture_video_frame(episode)
         # Forward pass on current state (returns Q values for each action)
         Q = self.model(state)
-        Q_ = Q.data.numpy()
+        Q_ = Q.cpu().data.numpy()
         # Select an action using predicted Q values
         action = self.actionChoice(Q_, train_mode)
         action_ = np.array([self.discrete_actions[action]])
@@ -132,12 +143,17 @@ class Agent():
         # Step through the environment using action_
         next_, reward, done, _, _ = self.env.step(action_)
         next_state = torch.from_numpy(next_).float() 
+
+        if render:
+            self.capture_video_frame(episode)
+
         return (next_state, action, reward, done)
     
     def update_epsilon(self, steps):
         """ updates the value of epsilon within each episode """
-        self.epsilon = self.maxEpsilon + (self.minEpsilon - self.maxEpsilon) * \
+        self.epsilon = self.minEpsilon + (self.maxEpsilon - self.minEpsilon) * \
         np.exp(-1. * steps / self.EPS_DECAY)
+
     
 
     # Run tests on the trained model
@@ -148,6 +164,7 @@ class Agent():
         self.frames = []
         if maxMoves is None:
             maxMoves = self.env.spec.max_episode_steps
+
         if saved_model_path is not None:
             model = torch.load(saved_model_path, weights_only=False)
             self.model.load_state_dict(model)
@@ -156,7 +173,8 @@ class Agent():
         wins = 0   # counts number of games won
         for g in range(numTest):
             info[g] = dict(actions=[], rewards=[], terminated=False)
-            # Initial state
+            # Initialize the environment and state                                                         
+            _ = self.env.reset()
             totalReward = 0
             frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
             next_frame = self.resize(self.get_frame()).unsqueeze(0) #.to(device)
@@ -168,7 +186,7 @@ class Agent():
             while (not done) and (moves < maxMoves):
                 moves += 1
                 if render:
-                    self.capture_video_frame(g)
+                    self.capture_video_frame(all=True)
                 Q = self.model(state) # Pass the state through the trained model
                 Q_ = Q.detach().numpy() 
                 action = np.argmax(Q_) 
@@ -180,12 +198,14 @@ class Agent():
                 totalReward += reward
                 # Set the next state as current state
                 state = next_frame - frame
+                if render:
+                    self.capture_video_frame(all=True)
                 # trace information
-                info[g]['actions'].append(action_)
+                info[g]['actions'].append(action_.item())
                 info[g]['rewards'].append(reward)
                 info[g]['terminated'] = done
             
-            print('Test episode {}: total rewards = {:.2f} (in {}/{} moves)' \
+            print('Test {}: total rewards = {:.2f} (in {}/{} moves)' \
                   .format(g, totalReward, moves, maxMoves))
             allRewards.append(totalReward)
             if done or (moves < maxMoves):
